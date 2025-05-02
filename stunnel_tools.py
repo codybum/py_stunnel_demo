@@ -2,15 +2,14 @@ import json
 import os
 import time
 import logging
-import urllib
-import uuid
 from typing import Dict, Any
 from urllib import request
 
-from pycrescolib.utils import decompress_param, compress_param, json_serialize
+from pycrescolib.utils import decompress_param, get_jar_info
 
 
 class STunnelTools:
+
     def __init__(self, client, logger=None):
         """
         Initialize the DataplaneTest class with a Cresco client
@@ -62,51 +61,7 @@ class STunnelTools:
         except Exception as e:
             self.logger.error(f"Error in binary callback: {e}")
 
-    def setup_dataplane(self):
-        """Configure and create the dataplane connection"""
-        dp_config = dict()
-        dp_config['ident_key'] = "stream_name"
-        dp_config['ident_id'] = "1234"
-        dp_config['io_type_key'] = "type"
-        dp_config['output_id'] = "output"
-        dp_config['input_id'] = "output"
-
-        '''
-        String queryString = "stunnel_id='" + deployConfigMap.get("stunnel_id") + "' AND type is NOT NULL";
-                    DataPlaneInterface dataPlaneStatus =  Launcher.crescoManager.getCrescoClient().getDataPlane(queryString , new TunnelMonitor(stunnelName));
-
-        '''
-
-        # Create dataplane configuration
-        stream_name = json.dumps(dp_config)
-
-        # Create dataplane with callbacks
-        dp = self.client.get_dataplane(
-            stream_name,
-            self.text_callback,
-            self.binary_callback
-        )
-
-        return dp
-
     def enable_performance_logger(self, stunnel_id):
-        """Configure and create the dataplane connection"""
-        dp_config = dict()
-        dp_config['ident_key'] = "stream_name"
-        dp_config['ident_id'] = "1234"
-        dp_config['io_type_key'] = "type"
-        dp_config['output_id'] = "output"
-        dp_config['input_id'] = "output"
-
-        '''
-        updatePerformanceMessage.setStringProperty("stunnel_id", tunnelConfig.get("stunnel_id"));
-                updatePerformanceMessage.setStringProperty("direction", direction);
-                updatePerformanceMessage.setStringProperty("type", "stats");
-
-        '''
-
-        # Create dataplane configuration
-        #stream_name = json.dumps(dp_config)
 
         stream_name = "stunnel_id='" + stunnel_id + "' AND type is NOT NULL";
 
@@ -141,22 +96,13 @@ class STunnelTools:
 
         try:
 
-            # (1) Make sure the stunnel plugin exists on the GC
-
-            # Download and upload plugin
-            jar_file_path = self.get_plugin_from_git(
-                "https://github.com/CrescoEdge/stunnel/releases/download/1.2-SNAPSHOT/stunnel-1.2-SNAPSHOT.jar")
-            reply = self.upload_plugin(jar_file_path)
-
-            # Get plugin configuration
-            config_str = decompress_param(reply['configparams'])
-            self.logger.info(f"Plugin config: {config_str}")
+            # (1) Make sure the stunnel plugin exists on the GC, if not deploy it
+            # If a URL is used we will always download the file
+            plugin_source = "https://github.com/CrescoEdge/stunnel/releases/download/1.2-SNAPSHOT/stunnel-1.2-SNAPSHOT.jar"
+            configparams = self.repo_plugin_check(plugin_source)
 
             # (2) Deploy the plugins to the agent(s) where you want to enable tunnels
             # * Note this just pushes the plugins to the agent(s) it does not establish stunnel configurations
-
-            # Create pipeline configuration
-            configparams = json.loads(config_str)
 
             cadl = {
                 'pipeline_id': '0',
@@ -165,7 +111,6 @@ class STunnelTools:
                 'edges': []
             }
 
-            # Source node (MS4500)
             params0 = {
                 'pluginname': configparams['pluginname'],
                 'md5': configparams['md5'],
@@ -288,7 +233,6 @@ class STunnelTools:
         if not os.path.exists(folder_path):
             # Create the folder if it doesn't exist
             os.makedirs(folder_path)
-            print(f"Folder '{folder_path}' created.")
 
         dst_file = src_url.rsplit('/', 1)[1]
         dst_path = os.path.join(folder_path, dst_file)
@@ -326,6 +270,47 @@ class STunnelTools:
             self.logger.error(f"Error uploading plugin: {e}")
             raise
 
+    def repo_plugin_check(self, plugin_source: str) -> str:
+        """Check if a plugin is present in the file repository."""
+
+        try:
+
+            # download if source is url
+            if plugin_source.startswith('https://'):
+                plugin_source = self.get_plugin_from_git(plugin_source)
+
+            config_str = get_jar_info(plugin_source)
+
+            plugin_name = config_str['pluginname']
+            plugin_version = config_str['version']
+            plugin_md5 = config_str['md5']
+
+            upload_plugin = True
+
+            message_event_type = 'EXEC'
+            message_payload = {
+                'action': 'listpluginsrepo',
+            }
+
+            reply = self.client.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+            reply = json.loads(decompress_param(reply['listpluginsrepo']))['plugins']
+            for plugin in reply:
+                if plugin['pluginname'] == plugin_name and plugin['version'] == plugin_version and plugin['md5'] == plugin_md5:
+                    self.logger.info(f"Plugin {plugin_name} version {plugin_version} found in file repository")
+                    upload_plugin = False
+            self.logger.info(f"Plugin {plugin_name} version {plugin_version} not found in file repository")
+
+            if upload_plugin:
+                self.upload_plugin(plugin_source)
+
+            # Get plugin configuration
+            self.logger.info(f"Plugin config: {config_str}")
+
+            return config_str
+
+        except Exception as e:
+            self.logger.error(f"Error checking plugin repository: {e}")
+
     def wait_for_pipeline(self, pipeline_id: str, target_status: int = 10, timeout: int = 60) -> bool:
         """Wait for pipeline to reach desired status.
 
@@ -354,62 +339,3 @@ class STunnelTools:
 
         self.logger.error(f"Timeout waiting for pipeline {pipeline_id} to reach status {target_status}")
         return False
-
-    # no need for this right now
-    def run_test_db(self, num_messages=100, delay=0.1):
-        """
-        Run the dataplane test by sending a series of messages
-
-        Args:
-            num_messages: Number of messages to send (default: 100)
-            delay: Delay between messages in seconds (default: 0.1)
-
-        Returns:
-            bool: True if test completed successfully, False otherwise
-        """
-        # Setup dataplane
-        stream_name = self.setup_dataplane()
-
-        # Connect dataplane
-        if self.dp.connect():
-            self.logger.info(f"Successfully connected to dataplane stream: {stream_name}")
-
-            # Wait a moment for the connection to stabilize
-            time.sleep(2)
-
-            # Send messages in a loop
-            self.logger.info(f"Starting to send {num_messages} messages...")
-
-            for i in range(num_messages):
-                # Create a message with counter
-                message = {
-                    "type": "test",
-                    "message": f"Message #{i + 1} of {num_messages}",
-                    "timestamp": time.time()
-                }
-
-                # Send as text message (JSON)
-                self.dp.send(json.dumps(message))
-
-                # Alternate between text and binary every 10 messages
-                if i % 10 == 5:
-                    # Send binary message
-                    binary_data = f"Binary message #{i + 1} of {num_messages}".encode('utf-8')
-                    self.dp.send_binary(binary_data)
-                    self.logger.info(f"Sent binary message #{i + 1}")
-                else:
-                    self.logger.info(f"Sent text message #{i + 1}")
-
-                # Small delay to avoid overwhelming the connection
-                time.sleep(delay)
-
-            self.logger.info(f"Finished sending {num_messages} messages")
-
-            # Wait a bit to ensure all messages are processed
-            self.logger.info("Waiting for 5 seconds to ensure all messages are processed...")
-            time.sleep(5)
-
-            return True
-        else:
-            self.logger.error(f"Failed to connect to dataplane stream: {stream_name}")
-            return False

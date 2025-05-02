@@ -11,31 +11,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 
 
-def text_callback(message):
-    """Callback for handling text messages from the dataplane"""
-    try:
-        # Try to parse as JSON for better formatting
-        try:
-            # logger.info("Received text message from dataplane:", message)
-            json_msg = json.loads(message)
-            logger.info(f"Text message (JSON): {json.dumps(json_msg, indent=2)}")
-        except json.JSONDecodeError:
-            # Not JSON, log as plain text
-            logger.info(f"Text message: {message}")
-    except Exception as e:
-        logger.error(f"Error in text callback: {e}")
-
-
-def binary_callback(data):
-    """Callback for handling binary messages from the dataplane"""
-    try:
-        logger.info(f"Binary data received: {len(data)} bytes")
-
-
-    except Exception as e:
-        logger.error(f"Error in binary callback: {e}")
-
-
 # Connection parameters
 host = 'localhost'
 port = 8282
@@ -66,7 +41,7 @@ if client.connect():
         src_region = global_region
         src_agent = global_agent
         # src_port this the port number of the new socket that will be created and tunneled to an existing socket
-        src_port = '2222'
+        src_port = '5202'
 
         # dst_region and dst_agent is the agent that will contact the existing socket.
         # It does not have to be on the same server as the socket, but the host and socket must be reachable
@@ -75,7 +50,7 @@ if client.connect():
         # dst_host is the ip or hostname of the server with the remote service
         dst_host = 'localhost'
         # dst_port the port of the remote server we want to tunnel from
-        dst_port = '2221'
+        dst_port = '5201'
         # buffer_size is the size of buffer used to communicate payloads on the Cresco dataplane.
         # The larger, the buffer, the more memory used but the higher the throughput.
         # The default message size of ActiveMQ is 100KiB, the average payload size on the public internet is between 20 and 1,500 bytes
@@ -110,31 +85,6 @@ if client.connect():
         else:
             logger.error("Stunnel pipeline deployment failed")
 
-
-        '''
-        stream_name = "stunnel_id is NOT NULL and type is NOT NULL"
-        # Create dataplane with callbacks
-        dp = client.get_dataplane(
-            stream_name,
-            text_callback,
-            binary_callback
-        )
-        dp.connect()
-
-
-        # Create and run DataplaneTest with the connected client
-        dataplane_tester = DataplaneTest(client, logger)
-        success = dataplane_tester.run_test(num_messages=100, delay=0.1)
-
-        if success:
-            logger.info("Dataplane test completed successfully")
-        else:
-            logger.error("Dataplane test failed")
-
-        while True:
-            time.sleep(1)
-
-        '''
 
     except Exception as e:
         logger.error(f"Error: {e}")
